@@ -5,10 +5,5 @@ hf-transfer
 peft
 tensorboard
 transformers>=4.46.0
-trl
+trl==0.15.2
 web3
-
-torch==2.2.1+cpu
-torchvision==0.17.1+cpu
-torchaudio==2.2.1+cpu
---index-url https://download.pytorch.org/whl/cpu
