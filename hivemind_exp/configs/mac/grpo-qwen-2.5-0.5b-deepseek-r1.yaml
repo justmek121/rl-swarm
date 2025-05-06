@@ -26,21 +26,24 @@ beta: 0.01 # 0.04 as in the deepseek math paper 0.001 from https://hijkzzz.notio
 max_prompt_length: 64
 max_completion_length: 256
 
-
 # CPU-specific optimizations
-num_workers: 36  
+num_workers: 36  # = Number of physical cores (18 cores/CPU x 2 CPUs)
 ddp_enabled: true
-torch_distributed_backend: "gloo"  
-torch_num_threads: 72  
-torch_intraop_threads: 36 
-torch_interop_threads: 2  
-pin_memory: false  
-non_blocking: false 
-prefetch_factor: 4  
-torch_use_deterministic_algorithms:
-torch_use_cpu_affinity: true  
+torch_distributed_backend: "gloo"  # Required when using CPU
+torch_num_threads: 72  # Total threads (36 threads/CPU x 2 CPUs)
+torch_intraop_threads: 36  # Each operation uses 1 CPU (36 threads)
+torch_interop_threads: 2  # Keep this to avoid contention
+pin_memory: false  # Not needed for CPU
+non_blocking: false  # Only meaningful with GPU
+prefetch_factor: 4  # Speed up data reading
+torch_use_deterministic_algorithms: false  # Disable to speed up
+torch_use_cpu_affinity: true  # Pin threads to physical cores
 
-
+# IMPORTANT: NUMA-aware settings (Linux)
+numactl_enabled: true           # Required to use both CPUs evenly
+numactl_cpunodebind: "0,1"      # Bind process to both CPUs
+torch_use_cpu_affinity: true    # Pin threads to physical cores
+ 
 numactl_enabled: true         
 numactl_cpunodebind: "0,1"     
 torch_use_cpu_affinity: true   
