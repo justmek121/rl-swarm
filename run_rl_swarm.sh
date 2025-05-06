@@ -103,7 +103,7 @@ export CPU_ONLY
 if [ "$CPU_ONLY" = "true" ]; then
     echo -e "\n${YELLOW}${BOLD}[✓] Running in CPU-only mode${NC}"
 else
-    echo -e "\n${YELLOW}${BOLD}[✓] Running in CPU-only mode${NC}"
+    echo -e "\n${GREEN}${BOLD}[✓] Running with GPU acceleration${NC}"
 fi
 
 while true; do
@@ -596,6 +596,41 @@ python3 -m venv .venv && . .venv/bin/activate && \
 echo -e "${GREEN}${BOLD}[✓] Python virtual environment set up successfully.${NC}" || \
 echo -e "${RED}${BOLD}[✗] Failed to set up virtual environment.${NC}"
 
+if [ -z "$CONFIG_PATH" ]; then
+    if command -v nvidia-smi &> /dev/null || [ -d "/proc/driver/nvidia" ]; then
+        echo -e "${GREEN}${BOLD}[✓] GPU detected${NC}"
+        
+        # Here was the problematic break statement - removing it and fixing logic
+        case "$PARAM_B" in
+            32 | 72) 
+                CONFIG_PATH="$ROOT/hivemind_exp/configs/gpu/grpo-qwen-2.5-${PARAM_B}b-bnb-4bit-deepseek-r1.yaml"
+                ;;
+            0.5 | 1.5 | 7) 
+                CONFIG_PATH="$ROOT/hivemind_exp/configs/gpu/grpo-qwen-2.5-${PARAM_B}b-deepseek-r1.yaml"
+                ;;
+            *)  
+                echo ">>> Parameter size not recognized. Defaulting to 0.5b."
+                CONFIG_PATH="$ROOT/hivemind_exp/configs/gpu/grpo-qwen-2.5-0.5b-deepseek-r1.yaml"
+                ;;
+        esac
+        
+        if [ "$USE_BIG_SWARM" = true ]; then
+            GAME="dapo"
+        else
+            GAME="gsm8k"
+        fi
+        echo -e "${CYAN}${BOLD}[✓] Config file : ${BOLD}$CONFIG_PATH\n${NC}"
+        echo -e "${CYAN}${BOLD}[✓] Installing GPU-specific requirements, may take few mins depending on your internet speed...${NC}"
+        pip install -r "$ROOT"/requirements-gpu.txt
+        pip install flash-attn --no-build-isolation
+    else
+        echo -e "${YELLOW}${BOLD}[✓] No GPU detected, using CPU configuration${NC}"
+        pip install -r "$ROOT"/requirements-cpu.txt
+        CONFIG_PATH="$ROOT/hivemind_exp/configs/mac/grpo-qwen-2.5-0.5b-deepseek-r1.yaml"
+        GAME="gsm8k"
+        echo -e "${CYAN}${BOLD}[✓] Config file : ${BOLD}$CONFIG_PATH\n${NC}"
+    fi
+fi
 
 
 if [ -n "${HF_TOKEN}" ]; then
@@ -616,6 +651,23 @@ echo -e "\n${GREEN}${BOLD}[✓] Good luck in the swarm! Your training session is
 #[ "$(uname)" = "Darwin" ] && sed -i '' -e 's/bootstrap_timeout: Optional\[float\] = None/bootstrap_timeout: float = 120/' -e 's/p2p = await P2P.create(\*\*kwargs)/p2p = await P2P.create(bootstrap_timeout=120, **kwargs)/' $(python3 -c 'import hivemind.dht.node as m; print(m.__file__)') || sed -i -e 's/bootstrap_timeout: Optional\[float\] = None/bootstrap_timeout: float = 120/' -e 's/p2p = await P2P.create(\*\*kwargs)/p2p = await P2P.create(bootstrap_timeout=120, **kwargs)/' $(python3 -c 'import hivemind.dht.node as m; print(m.__file__)')
 
 
-
+if [ -n "$ORG_ID" ]; then
+    python -m hivemind_exp.gsm8k.train_single_gpu \
+        --hf_token "$HUGGINGFACE_ACCESS_TOKEN" \
+        --identity_path "$IDENTITY_PATH" \
+        --modal_org_id "$ORG_ID" \
+        --contract_address "$SWARM_CONTRACT" \
+        --config "$CONFIG_PATH" \
+        --game "$GAME"
+else
+    python -m hivemind_exp.gsm8k.train_single_gpu \
+        --hf_token "$HUGGINGFACE_ACCESS_TOKEN" \
+        --identity_path "$IDENTITY_PATH" \
+        --public_maddr "$PUB_MULTI_ADDRS" \
+        --initial_peers "$PEER_MULTI_ADDRS" \
+        --host_maddr "$HOST_MULTI_ADDRS" \
+        --config "$CONFIG_PATH" \
+        --game "$GAME"
+fi
 
 wait
