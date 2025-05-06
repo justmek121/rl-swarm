@@ -35,31 +35,6 @@ IDENTITY_PATH=${IDENTITY_PATH:-$DEFAULT_IDENTITY_PATH}
 SMALL_SWARM_CONTRACT="0x69C6e1D608ec64885E7b185d39b04B491a71768C"
 BIG_SWARM_CONTRACT="0x6947c6E196a48B77eFa9331EC1E3e45f3Ee5Fd58"
 
-# Automatically install Python 3.10 if not already installed
-if ! command -v python3.10 &>/dev/null; then
-    echo "[✓] Python 3.10 not found. Installing..."
-    sudo apt update
-    sudo apt install -y software-properties-common
-    sudo add-apt-repository -y ppa:deadsnakes/ppa
-    sudo apt update
-    sudo apt install -y python3.10 python3.10-venv python3.10-dev
-else
-    echo "[✓] Python 3.10 is already installed."
-fi
-
-# Create virtual environment if it doesn't exist
-if [ ! -d ".venv" ]; then
-    echo "[✓] Creating virtual environment with Python 3.10..."
-    python3.10 -m venv .venv
-fi
-
-# Activate the virtual environment
-source .venv/bin/activate
-
-# Confirm active Python version
-echo "[✓] Using Python version: $(python --version)"
-
-
 if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   if command -v apt &>/dev/null; then
     echo -e "${CYAN}${BOLD}[✓] Debian/Ubuntu detected. Installing build-essential, gcc, g++...${NC}"
@@ -96,7 +71,157 @@ else
   echo -e "${RED}${BOLD}[✗] gcc not found. Please install it manually.${NC}"
 fi
 
+check_cuda_installation() {
+    echo -e "\n${CYAN}${BOLD}[✓] Checking GPU and CUDA installation...${NC}"
+    
+    GPU_AVAILABLE=false
+    CUDA_AVAILABLE=false
+    NVCC_AVAILABLE=false
+    
+    detect_gpu() {
 
+        if command -v lspci &> /dev/null; then
+            if lspci | grep -i nvidia &> /dev/null; then
+                echo -e "${GREEN}${BOLD}[✓] NVIDIA GPU detected (via lspci)${NC}"
+                return 0
+            elif lspci | grep -i "vga\|3d\|display" | grep -i "amd\|radeon\|ati" &> /dev/null; then
+                echo -e "${YELLOW}${BOLD}[!] AMD GPU detected (via lspci)${NC}"
+                echo -e "${YELLOW}${BOLD}[!] This script only supports NVIDIA GPUs for CUDA installation${NC}"
+                return 2 
+            fi
+            return 1 
+        fi
+        
+
+        if command -v nvidia-smi &> /dev/null; then
+            if nvidia-smi &> /dev/null; then
+                echo -e "${GREEN}${BOLD}[✓] NVIDIA GPU detected (via nvidia-smi)${NC}"
+                return 0
+            fi
+        fi
+        
+        if [ -d "/proc/driver/nvidia" ] || [ -d "/dev/nvidia0" ]; then
+            echo -e "${GREEN}${BOLD}[✓] NVIDIA GPU detected (via system directories)${NC}"
+            return 0
+        fi
+        
+        if [ -x "/usr/local/cuda/samples/bin/x86_64/linux/release/deviceQuery" ]; then
+            if /usr/local/cuda/samples/bin/x86_64/linux/release/deviceQuery | grep "Result = PASS" &> /dev/null; then
+                echo -e "${GREEN}${BOLD}[✓] NVIDIA GPU detected (via deviceQuery)${NC}"
+                return 0
+            fi
+        fi
+
+
+        if [ -d "/sys/class/gpu" ] || ls /sys/bus/pci/devices/*/vendor 2>/dev/null | xargs cat 2>/dev/null | grep -q "0x10de"; then
+            echo -e "${GREEN}${BOLD}[✓] NVIDIA GPU detected (via sysfs)${NC}"
+            return 0
+        fi
+
+
+        echo -e "${YELLOW}${BOLD}[!] No NVIDIA GPU detected with any detection method${NC}"
+        return 1
+    }
+    
+    detect_gpu
+    gpu_result=$?
+    
+    if [ $gpu_result -eq 0 ]; then
+        GPU_AVAILABLE=true
+    elif [ $gpu_result -eq 2 ]; then
+        echo -e "${YELLOW}${BOLD}[!] Proceeding with CPU-only mode${NC}"
+        CPU_ONLY="true"
+        return 0
+    else
+
+        echo -e "${YELLOW}${BOLD}[!] No NVIDIA GPU detected - using CPU-only mode${NC}"
+        echo -e "${YELLOW}${BOLD}[!] CUDA installation will be skipped${NC}"
+        CPU_ONLY="true"
+        return 0
+    fi
+
+    if command -v nvidia-smi &> /dev/null; then
+        echo -e "${GREEN}${BOLD}[✓] CUDA drivers detected (nvidia-smi found)${NC}"
+        CUDA_AVAILABLE=true
+
+        echo -e "${CYAN}${BOLD}[✓] GPU information:${NC}"
+        nvidia-smi --query-gpu=name,driver_version,temperature.gpu,utilization.gpu --format=csv,noheader
+    elif [ -d "/proc/driver/nvidia" ]; then
+        echo -e "${GREEN}${BOLD}[✓] CUDA drivers detected (NVIDIA driver directory found)${NC}"
+        CUDA_AVAILABLE=true
+    else
+        echo -e "${YELLOW}${BOLD}[!] CUDA drivers not detected${NC}"
+    fi
+    
+    if command -v nvcc &> /dev/null; then
+        NVCC_VERSION=$(nvcc --version | grep "release" | awk '{print $5}' | cut -d',' -f1)
+        echo -e "${GREEN}${BOLD}[✓] NVCC compiler detected (version $NVCC_VERSION)${NC}"
+        NVCC_AVAILABLE=true
+    else
+        echo -e "${YELLOW}${BOLD}[!] NVCC compiler not detected${NC}"
+    fi
+    
+    if [ "$GPU_AVAILABLE" = true ] && ([ "$CUDA_AVAILABLE" = false ] || [ "$NVCC_AVAILABLE" = false ]); then
+        echo -e "${YELLOW}${BOLD}[!] NVIDIA GPU is available but CUDA environment is not completely set up${NC}"
+        read -p "Would you like to install CUDA and NVCC? [Y/n] " install_choice
+        install_choice=${install_choice:-Y}
+        
+        if [[ $install_choice =~ ^[Yy]$ ]]; then
+            echo -e "${CYAN}${BOLD}[✓] Downloading and running CUDA installation script from GitHub...${NC}"
+            bash <(curl -sSL https://raw.githubusercontent.com/zunxbt/gensyn-testnet/main/cuda.sh)
+            if [ $? -eq 0 ]; then
+                echo -e "${GREEN}${BOLD}[✓] CUDA installation script completed successfully${NC}"
+                source ~/.profile 2>/dev/null || true
+                source ~/.bashrc 2>/dev/null || true
+                
+                if [ -f "/etc/profile.d/cuda.sh" ]; then
+                    source /etc/profile.d/cuda.sh
+                fi
+                
+                if [ -d "/usr/local/cuda/bin" ] && [[ ":$PATH:" != *":/usr/local/cuda/bin:"* ]]; then
+                    export PATH="/usr/local/cuda/bin:$PATH"
+                fi
+                
+                if [ -d "/usr/local/cuda/lib64" ] && [[ ":$LD_LIBRARY_PATH:" != *":/usr/local/cuda/lib64:"* ]]; then
+                    export LD_LIBRARY_PATH="/usr/local/cuda/lib64:$LD_LIBRARY_PATH"
+                fi
+                
+                if command -v nvcc &> /dev/null; then
+                    NVCC_VERSION=$(nvcc --version | grep "release" | awk '{print $5}' | cut -d',' -f1)
+                    echo -e "${GREEN}${BOLD}[✓] NVCC successfully installed (version $NVCC_VERSION)${NC}"
+                    NVCC_AVAILABLE=true
+                else
+                    echo -e "${YELLOW}${BOLD}[!] NVCC installation may require a system restart${NC}"
+                    echo -e "${YELLOW}${BOLD}[!] If you continue to have issues after this script completes, please restart your system${NC}"
+                fi
+                
+                if command -v nvidia-smi &> /dev/null; then
+                    echo -e "${CYAN}${BOLD}[✓] Current NVIDIA driver information:${NC}"
+                    nvidia-smi --query-gpu=driver_version,name,temperature.gpu,utilization.gpu,utilization.memory --format=csv,noheader
+                fi
+            else
+                echo -e "${RED}${BOLD}[✗] CUDA installation failed${NC}"
+                echo -e "${YELLOW}${BOLD}[!] Please try installing CUDA manually by following NVIDIA's installation guide${NC}"
+                echo -e "${YELLOW}${BOLD}[!] Proceeding with CPU-only mode${NC}"
+                CPU_ONLY="true"
+            fi
+        else
+            echo -e "${YELLOW}${BOLD}[!] Proceeding without CUDA installation${NC}"
+            echo -e "${YELLOW}${BOLD}[!] CPU-only mode will be used${NC}"
+            CPU_ONLY="true"
+        fi
+    elif [ "$GPU_AVAILABLE" = true ] && [ "$CUDA_AVAILABLE" = true ] && [ "$NVCC_AVAILABLE" = true ]; then
+        echo -e "${GREEN}${BOLD}[✓] GPU with CUDA environment properly configured${NC}"
+        CPU_ONLY="false"
+    else
+        echo -e "${YELLOW}${BOLD}[!] Using CPU-only mode${NC}"
+        CPU_ONLY="true"
+    fi
+    
+    return 0
+}
+
+check_cuda_installation
 
 export CPU_ONLY
 
@@ -143,21 +268,6 @@ cleanup() {
 }
 
 trap cleanup INT
-
-echo -e "\033[38;5;45m\033[1m"  
-# echo -e "\033[38;5;224m"
-cat << "EOF"
-    ██████  ██            ███████ ██     ██  █████  ██████  ███    ███ 
-    ██   ██ ██            ██      ██     ██ ██   ██ ██   ██ ████  ████ 
-    ██████  ██      █████ ███████ ██  █  ██ ███████ ██████  ██ ████ ██ 
-    ██   ██ ██                 ██ ██ ███ ██ ██   ██ ██   ██ ██  ██  ██ 
-    ██   ██ ███████       ███████  ███ ███  ██   ██ ██   ██ ██      ██ 
-    
-          
-           JOIN THE COMMUNITY : https://t.me/Nexgenexplore
-                                                                
-EOF
-echo -e "\033[0m"  #dat lai mau sau
 
 sleep 2
 
@@ -646,11 +756,8 @@ else
 fi
 
 echo -e "\n${GREEN}${BOLD}[✓] Good luck in the swarm! Your training session is about to begin.\n${NC}"
-#[ "$(uname)" = "Darwin" ] && sed -i '' -E -e 's/(startup_timeout: *float *= *)[0-9.]+/\1120/' -e '/startup_timeout: float = 120,/a\'$'\n''    bootstrap_timeout: float = 120,' -e '/anonymous_p2p = await cls\.create\(/a\'$'\n''        bootstrap_timeout=120,' $(python3 -c "import hivemind.p2p.p2p_daemon as m; print(m.__file__)") || sed -i -E -e 's/(startup_timeout: *float *= *)[0-9.]+/\1120/' -e '/startup_timeout: float = 120,/a\    bootstrap_timeout: float = 120,' -e '/anonymous_p2p = await cls\.create\(/a\        bootstrap_timeout=120,' $(python3 -c "import hivemind.p2p.p2p_daemon as m; print(m.__file__)")
-
-#[ "$(uname)" = "Darwin" ] && sed -i '' -e 's/bootstrap_timeout: Optional\[float\] = None/bootstrap_timeout: float = 120/' -e 's/p2p = await P2P.create(\*\*kwargs)/p2p = await P2P.create(bootstrap_timeout=120, **kwargs)/' $(python3 -c 'import hivemind.dht.node as m; print(m.__file__)') || sed -i -e 's/bootstrap_timeout: Optional\[float\] = None/bootstrap_timeout: float = 120/' -e 's/p2p = await P2P.create(\*\*kwargs)/p2p = await P2P.create(bootstrap_timeout=120, **kwargs)/' $(python3 -c 'import hivemind.dht.node as m; print(m.__file__)')
-
-
+[ "$(uname)" = "Darwin" ] && sed -i '' -E 's/(startup_timeout: *float *= *)[0-9.]+/\1120/' $(python3 -c "import hivemind.p2p.p2p_daemon as m; print(m.__file__)") || sed -i -E 's/(startup_timeout: *float *= *)[0-9.]+/\1120/' $(python3 -c "import hivemind.p2p.p2p_daemon as m; print(m.__file__)")
+[ "$(uname)" = "Darwin" ] && sed -i '' -e '/bootstrap_timeout: Optional\[float\] = None/s//bootstrap_timeout: float = 120/' $(python3 -c 'import hivemind.dht.node as m; print(m.__file__)') || sed -i -e '/bootstrap_timeout: Optional\[float\] = None/s//bootstrap_timeout: float = 120/' $(python3 -c 'import hivemind.dht.node as m; print(m.__file__)')
 if [ -n "$ORG_ID" ]; then
     python -m hivemind_exp.gsm8k.train_single_gpu \
         --hf_token "$HUGGINGFACE_ACCESS_TOKEN" \
