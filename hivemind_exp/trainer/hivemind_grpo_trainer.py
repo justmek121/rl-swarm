@@ -201,9 +201,6 @@ class HivemindGRPOTrainer:
 
         self.cleanup()
 
-        del trainer
-        gc.collect()
-
     def cleanup(self):
         # Clear various stage caches.
         gc.collect()
