@@ -82,7 +82,7 @@ else
     SWARM_CONTRACT="$SMALL_SWARM_CONTRACT"
 fi
 
-PARAM_B= 0.5
+PARAM_B=0.5
 
 cleanup() {
     echo -e "${YELLOW}${BOLD}[✓] Shutting down processes...${NC}"
